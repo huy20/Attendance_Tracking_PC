@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}Registered Users — FaceTrack{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Registered Users</h1>
+    <p>Manage all registered face profiles. Total: <strong>{{ users|length }}</strong></p>
+</div>
+
+<div class="users-grid">
+    {% if users %}
+        {% for user in users %}
+        <div class="user-card glass-card" id="user-{{ user.folder }}">
+            <div class="user-avatar">{{ user.display[0] | upper }}</div>
+            <div class="user-info">
+                <h3 class="user-name">{{ user.display }}</h3>
+                <span class="user-meta">{{ user.images }} image{{ 's' if user.images != 1 else '' }} captured</span>
+            </div>
+            <button class="btn btn-danger btn-sm" onclick="confirmDelete('{{ user.folder }}', '{{ user.display }}')">
+                Delete
+            </button>
+        </div>
+        {% endfor %}
+    {% else %}
+        <div class="empty-state glass-card">
+            <div class="empty-icon">👤</div>
+            <h2>No Users Registered</h2>
+            <p>Go to the <a href="/register">Registration</a> page to add your first face.</p>
+        </div>
+    {% endif %}
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div id="delete-modal" class="modal-overlay hidden">
+    <div class="modal glass-card">
+        <h2>Confirm Deletion</h2>
+        <p>Are you sure you want to delete <strong id="modal-name"></strong>?</p>
+        <p class="modal-warning">This will remove all images and embeddings permanently.</p>
+        <div class="modal-actions">
+            <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+            <button id="btn-confirm-delete" class="btn btn-danger" onclick="executeDelete()">Yes, Delete</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    let pendingDeleteFolder = null;
+
+    function confirmDelete(folder, displayName) {
+        pendingDeleteFolder = folder;
+        document.getElementById('modal-name').textContent = displayName;
+        document.getElementById('delete-modal').classList.remove('hidden');
+    }
+
+    function closeModal() {
+        document.getElementById('delete-modal').classList.add('hidden');
+        pendingDeleteFolder = null;
+    }
+
+    async function executeDelete() {
+        if (!pendingDeleteFolder) return;
+        const folder = pendingDeleteFolder;
+
+        try {
+            const res = await fetch(`/api/users/delete/${folder}`, { method: 'POST' });
+            const data = await res.json();
+
+            if (data.success) {
+                const card = document.getElementById(`user-${folder}`);
+                if (card) {
+                    card.style.animation = 'fadeOut 0.3s ease forwards';
+                    setTimeout(() => card.remove(), 300);
+                }
+            } else {
+                alert('Failed to delete user.');
+            }
+        } catch (err) {
+            alert('Error: ' + err.message);
+        }
+
+        closeModal();
+    }
+
+    // Close modal on overlay click
+    document.getElementById('delete-modal').addEventListener('click', function(e) {
+        if (e.target === this) closeModal();
+    });
+</script>
+{% endblock %}

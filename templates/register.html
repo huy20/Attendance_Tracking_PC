@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Register New Face — FaceTrack{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Register New Face</h1>
+    <p>Enter a name and look at the camera to capture your face profile.</p>
+</div>
+
+<div class="register-container">
+    <!-- Step 1: Name Input -->
+    <div id="step-name" class="register-step active">
+        <div class="glass-card">
+            <label for="person-name" class="input-label">Person Name or ID</label>
+            <input type="text" id="person-name" class="text-input" placeholder="e.g. John Doe" autocomplete="off">
+            <button id="btn-start" class="btn btn-primary btn-lg" onclick="startRegistration()">
+                Start Camera
+            </button>
+        </div>
+    </div>
+
+    <!-- Step 2: Camera Capture -->
+    <div id="step-camera" class="register-step">
+        <div class="camera-wrapper">
+            <video id="webcam" autoplay playsinline muted></video>
+            <canvas id="canvas" style="display:none;"></canvas>
+            <div id="face-overlay" class="face-overlay"></div>
+        </div>
+
+        <div class="capture-info glass-card">
+            <div class="status-row">
+                <span class="status-label">Status</span>
+                <span id="reg-status" class="status-badge">Initializing...</span>
+            </div>
+            <div class="status-row">
+                <span class="status-label">Reason</span>
+                <span id="reg-reason" class="status-text">—</span>
+            </div>
+            <div class="progress-wrapper">
+                <div class="progress-bar">
+                    <div id="reg-progress" class="progress-fill" style="width:0%"></div>
+                </div>
+            </div>
+            <div class="status-row">
+                <span class="status-label">Shots</span>
+                <span id="reg-shots" class="status-text shots-counter">0 / 10</span>
+            </div>
+            <button id="btn-cancel" class="btn btn-danger" onclick="cancelRegistration()">Cancel</button>
+        </div>
+    </div>
+
+    <!-- Step 3: Processing -->
+    <div id="step-processing" class="register-step">
+        <div class="glass-card center-content">
+            <div class="spinner"></div>
+            <h2>Generating Embeddings...</h2>
+            <p>Please wait while ArcFace processes the captured faces.</p>
+        </div>
+    </div>
+
+    <!-- Step 4: Done -->
+    <div id="step-done" class="register-step">
+        <div class="glass-card center-content">
+            <div class="success-icon">✅</div>
+            <h2>Registration Complete!</h2>
+            <p id="done-message">Profile has been saved successfully.</p>
+            <a href="/" class="btn btn-primary">Back to Dashboard</a>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/register.js') }}"></script>
+{% endblock %}

@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}FaceTrack — Dashboard{% endblock %}
+
+{% block content %}
+<section class="hero">
+    <h1 class="hero-title">Face Recognition<br><span class="gradient-text">Attendance System</span></h1>
+    <p class="hero-subtitle">Register faces, recognize employees, and track attendance — all from your browser.</p>
+</section>
+
+<section class="dashboard-grid">
+    <a href="/register" class="dash-card card-register" id="card-register">
+        <div class="card-icon">📸</div>
+        <h2>Register Face</h2>
+        <p>Capture and store a new person's face for recognition</p>
+        <span class="card-arrow">→</span>
+    </a>
+
+    <a href="/recognize" class="dash-card card-recognize" id="card-recognize">
+        <div class="card-icon">🔍</div>
+        <h2>Live Recognition</h2>
+        <p>Identify registered users in real-time via webcam</p>
+        <span class="card-arrow">→</span>
+    </a>
+
+    <a href="/users" class="dash-card card-users" id="card-users">
+        <div class="card-icon">👥</div>
+        <h2>Manage Users</h2>
+        <p>View and manage all registered face profiles</p>
+        <span class="card-arrow">→</span>
+    </a>
+
+    <a href="/attendance" class="dash-card card-attendance" id="card-attendance">
+        <div class="card-icon">📋</div>
+        <h2>Attendance Log</h2>
+        <p>Review today's attendance records and history</p>
+        <span class="card-arrow">→</span>
+    </a>
+</section>
+{% endblock %}

@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Face Recognition Attendance Tracking System">
+    <title>{% block title %}Attendance Tracker{% endblock %}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    {% block head %}{% endblock %}
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar">
+        <a href="/" class="nav-brand">
+            <span class="nav-icon">👁️</span>
+            <span>FaceTrack</span>
+        </a>
+        <div class="nav-links">
+            <a href="/" class="nav-link">Home</a>
+            <a href="/register" class="nav-link">Register</a>
+            <a href="/recognize" class="nav-link">Recognize</a>
+            <a href="/users" class="nav-link">Users</a>
+            <a href="/attendance" class="nav-link">Attendance</a>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        {% block content %}{% endblock %}
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <p>FaceTrack Attendance System &middot; MediaPipe + ArcFace</p>
+    </footer>
+
+    {% block scripts %}{% endblock %}
+</body>
+</html>

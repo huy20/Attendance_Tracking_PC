@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Live Recognition — FaceTrack{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Live Recognition</h1>
+    <p>Point your camera at a registered person to identify and log attendance.</p>
+</div>
+
+<div class="recognize-container">
+    <div class="camera-wrapper camera-large">
+        <video id="webcam" autoplay playsinline muted></video>
+        <canvas id="canvas" style="display:none;"></canvas>
+
+        <!-- Recognition result overlay -->
+        <div id="recog-overlay" class="recog-overlay hidden">
+            <div id="recog-name" class="recog-name">—</div>
+            <div id="recog-confidence" class="recog-confidence">0%</div>
+        </div>
+
+        <!-- Consensus progress indicator -->
+        <div id="consensus-bar" class="consensus-bar">
+            <div id="consensus-fill" class="consensus-fill"></div>
+        </div>
+    </div>
+
+    <div class="recog-controls glass-card">
+        <div class="status-row">
+            <span class="status-label">Status</span>
+            <span id="recog-status" class="status-badge">Starting...</span>
+        </div>
+        <div class="status-row">
+            <span class="status-label">Last Logged</span>
+            <span id="last-logged" class="status-text">—</span>
+        </div>
+        <div class="recog-btn-row">
+            <button id="btn-start-recog" class="btn btn-primary" onclick="toggleRecognition()">Start</button>
+            <a href="/" class="btn btn-secondary">Back</a>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/recognize.js') }}"></script>
+{% endblock %}

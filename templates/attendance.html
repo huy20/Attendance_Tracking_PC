@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Attendance Log — FaceTrack{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Today's Attendance</h1>
+    <p id="attendance-summary">Loading records...</p>
+</div>
+
+<div class="attendance-container">
+    <div class="glass-card">
+        <div class="table-wrapper">
+            <table class="att-table" id="att-table">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Name</th>
+                        <th>Time</th>
+                    </tr>
+                </thead>
+                <tbody id="att-body">
+                    <tr><td colspan="3" class="table-empty">Loading...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="att-actions">
+        <button class="btn btn-primary" onclick="loadAttendance()">🔄 Refresh</button>
+        <a href="/" class="btn btn-secondary">Back to Dashboard</a>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    async function loadAttendance() {
+        try {
+            const res = await fetch('/api/attendance/today');
+            const data = await res.json();
+
+            const tbody = document.getElementById('att-body');
+            const summary = document.getElementById('attendance-summary');
+
+            summary.textContent = `${data.count} record${data.count !== 1 ? 's' : ''} found today.`;
+
+            if (data.records.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="3" class="table-empty">No attendance records for today.</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = data.records.map((r, i) => {
+                const timeOnly = r.timestamp.includes(' ') ? r.timestamp.split(' ')[1] : r.timestamp;
+                const displayName = r.name.replace(/_/g, ' ');
+                return `<tr>
+                    <td>${i + 1}</td>
+                    <td>${displayName}</td>
+                    <td>${timeOnly}</td>
+                </tr>`;
+            }).join('');
+
+        } catch (err) {
+            document.getElementById('att-body').innerHTML =
+                '<tr><td colspan="3" class="table-empty">Error loading attendance data.</td></tr>';
+        }
+    }
+
+    // Load on page open
+    loadAttendance();
+</script>
+{% endblock %}

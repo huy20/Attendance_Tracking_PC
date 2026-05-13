@@ -463,7 +463,7 @@ if __name__ == "__main__":
     # e.g., "http://192.168.1.100:5000/api/sync"
     syncer = AttendanceSyncer(
         db_path=os.path.join(DATA_DIR, "attendance.db"),
-        host_url='http://10.40.90.249:5000/sync',
+        host_url='http://10.40.90.249:5050/sync',
         sync_interval=60.0
     )
     syncer.start_syncing()

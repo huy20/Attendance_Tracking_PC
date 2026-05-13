@@ -3,7 +3,7 @@ Flask Web Application for Face Recognition Attendance Tracking.
 Replaces the Kivy Android app with a browser-based interface.
 
 Uses:
-- Yunet for face detection (replaces Android ML Kit)
+- MediaPipe for face detection (replaces Android ML Kit)
 - MobileFaceNet/ArcFace for face recognition
 - SQLite for local storage
 - Browser webcam via JavaScript getUserMedia
@@ -25,9 +25,24 @@ from face_detection import FaceDetector
 from arcface_recognizer import ArcFaceRecognizer
 
 # ─── App Setup ────────────────────────────────────────────────
-app = Flask(__name__)
 
-DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+import sys
+
+# PyInstaller path resolution
+if getattr(sys, 'frozen', False):
+    # Running as bundled executable
+    BASE_DIR = sys._MEIPASS # Where PyInstaller unpacks templates/static
+    EXE_DIR = os.path.dirname(sys.executable) # Where the actual .exe is located
+    DATA_DIR = os.path.join(EXE_DIR, "data") # We want data saved next to the .exe
+else:
+    # Running as normal python script
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    DATA_DIR = os.path.join(BASE_DIR, "data")
+
+app = Flask(__name__, 
+            template_folder=os.path.join(BASE_DIR, "templates"),
+            static_folder=os.path.join(BASE_DIR, "static"))
+
 FACES_DIR = os.path.join(DATA_DIR, "registered_faces")
 os.makedirs(FACES_DIR, exist_ok=True)
 
@@ -431,6 +446,8 @@ def api_receive_sync():
     return jsonify({"success": True, "inserted": inserted})
 
 
+from network_sync import AttendanceSyncer
+
 # ═══════════════════════════════════════════════════════════════
 #  MAIN
 # ═══════════════════════════════════════════════════════════════
@@ -440,4 +457,19 @@ if __name__ == "__main__":
     print("  Face Recognition Attendance System")
     print("  Open http://localhost:5000 in your browser")
     print("=" * 50)
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    
+    # Setup network syncer
+    # Change host_url to the IP of your central server receiving the syncs
+    # e.g., "http://192.168.1.100:5000/api/sync"
+    syncer = AttendanceSyncer(
+        db_path=os.path.join(DATA_DIR, "attendance.db"),
+        host_url='http://10.40.90.249:5000/sync',
+        sync_interval=60.0
+    )
+    syncer.start_syncing()
+    
+    try:
+        # Use debug=False to prevent Flask's reloader from starting the syncer twice
+        app.run(host="0.0.0.0", port=5000, debug=False)
+    finally:
+        syncer.stop_syncing()

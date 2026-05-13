@@ -1,7 +1,18 @@
 """
-Face Detection module using OpenCV DNN (Caffe SSD) face detector.
-Replaces the Android ML Kit-based face_register.py for web/desktop use.
-Falls back to Haar Cascade if the Caffe model is not available.
+Face Detection module using YuNet (cv2.FaceDetectorYN).
+YuNet is OpenCV's built-in lightweight face detector — no separate download
+needed for opencv-contrib-python>=4.8. It runs faster than res10 Caffe SSD,
+returns 5-point landmarks (eyes, nose, mouth corners), and works well on
+frontal faces typical of kiosk/attendance deployments.
+
+Landmarks returned by YuNet per face (indices into the raw row):
+  [0..3]   bounding box  x, y, w, h
+  [4..5]   right eye     x, y
+  [6..7]   left eye      x, y
+  [8..9]   nose tip      x, y
+  [10..11] right mouth   x, y
+  [12..13] left mouth    x, y
+  [14]     confidence score
 """
 
 import cv2
@@ -10,96 +21,128 @@ import os
 import urllib.request
 
 
-# Model URLs for the Caffe SSD face detector
-PROTOTXT_URL = "https://raw.githubusercontent.com/opencv/opencv/master/samples/dnn/face_detector/deploy.prototxt"
-CAFFEMODEL_URL = "https://raw.githubusercontent.com/opencv/opencv_3rdparty/dnn_samples_face_detector_20170830/res10_300x300_ssd_iter_140000.caffemodel"
+YUNET_URL = (
+    "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/"
+    "face_detection_yunet_2023mar.onnx"
+)
 
 
 class FaceDetector:
-    """OpenCV DNN-based face detector with quality checks."""
+    """YuNet-based face detector with quality checks."""
 
-    def __init__(self):
+    def __init__(self, input_size=(320, 320)):
         model_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
         os.makedirs(model_dir, exist_ok=True)
 
-        prototxt_path = os.path.join(model_dir, "deploy.prototxt")
-        caffemodel_path = os.path.join(model_dir, "res10_300x300_ssd_iter_140000.caffemodel")
+        model_path = os.path.join(model_dir, "face_detection_yunet_2023mar.onnx")
+        self._download_if_missing(model_path, YUNET_URL, "YuNet ONNX")
 
-        # Download models if missing
-        self._download_if_missing(prototxt_path, PROTOTXT_URL, "deploy.prototxt")
-        self._download_if_missing(caffemodel_path, CAFFEMODEL_URL, "caffemodel")
+        self._input_size = input_size  # (w, h) — updated per frame in detect()
+        self.detector = cv2.FaceDetectorYN.create(
+            model=model_path,
+            config="",
+            input_size=input_size,
+            score_threshold=0.6,   # confidence cutoff (YuNet default 0.9 is too strict indoors)
+            nms_threshold=0.3,
+            top_k=5,               # max detections; kiosk only needs 1–2
+        )
 
-        self.net = cv2.dnn.readNetFromCaffe(prototxt_path, caffemodel_path)
-        self.confidence_threshold = 0.5
-
-        # Quality thresholds
-        self.MIN_FACE_RATIO = 0.15
-        self.MAX_FACE_RATIO = 0.85
-        self.BRIGHTNESS_LOW = 70
-        self.BRIGHTNESS_HIGH = 180
-        self.BLUR_THRESHOLD = 80
+        # Quality thresholds (same semantics as before)
+        self.MIN_FACE_RATIO   = 0.15
+        self.MAX_FACE_RATIO   = 0.85
+        self.BRIGHTNESS_LOW   = 70
+        self.BRIGHTNESS_HIGH  = 180
+        self.BLUR_THRESHOLD   = 20
         self.CENTER_THRESHOLD = 0.20
 
-        print("FaceDetector initialized (OpenCV DNN SSD)")
+        print("FaceDetector initialized (YuNet)")
 
-    def _download_if_missing(self, filepath, url, label):
+    # ── Model download ──────────────────────────────────────────────────────
+
+    def _download_if_missing(self, filepath, url, label, timeout=15):
         """Download a model file if it doesn't exist locally."""
-        if not os.path.exists(filepath):
-            print(f"Downloading {label}...")
-            try:
-                urllib.request.urlretrieve(url, filepath)
-                print(f"  [OK] Downloaded {label}")
-            except Exception as e:
-                print(f"  [FAIL] Failed to download {label}: {e}")
-                raise
+        if os.path.exists(filepath):
+            return
+        print(f"Downloading {label} ...")
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=timeout) as resp, \
+                 open(filepath, "wb") as f:
+                f.write(resp.read())
+            print(f"  [OK] {label} saved to {filepath}")
+        except Exception as e:
+            print(f"  [FAIL] Could not download {label}: {e}")
+            raise RuntimeError(
+                f"Required model '{label}' not found and download failed.\n"
+                f"Download manually from:\n  {url}\n"
+                f"and place it at:\n  {filepath}"
+            ) from e
+
+    # ── Detection ───────────────────────────────────────────────────────────
 
     def detect(self, frame_bgr):
         """
         Detect faces in a BGR frame.
-        Returns list of face dicts: [{x, y, w, h, confidence}, ...]
+        Returns list of face dicts:
+          {x, y, w, h, confidence, landmarks}
+        where landmarks = {right_eye, left_eye, nose, right_mouth, left_mouth}
+        each being an (x, y) tuple.
         """
         h, w = frame_bgr.shape[:2]
 
-        # Create a blob and run the network
-        blob = cv2.dnn.blobFromImage(
-            cv2.resize(frame_bgr, (300, 300)),
-            1.0, (300, 300),
-            (104.0, 177.0, 123.0)
-        )
-        self.net.setInput(blob)
-        detections = self.net.forward()
+        # YuNet requires the input_size to match the frame being processed
+        if (w, h) != self._input_size:
+            self._input_size = (w, h)
+            self.detector.setInputSize((w, h))
+
+        _, raw = self.detector.detect(frame_bgr)
 
         faces = []
-        for i in range(detections.shape[2]):
-            confidence = float(detections[0, 0, i, 2])
-            if confidence < self.confidence_threshold:
-                continue
+        if raw is None:
+            return faces
 
-            box = detections[0, 0, i, 3:7] * np.array([w, h, w, h])
-            x1, y1, x2, y2 = box.astype(int)
+        for det in raw:
+            # det layout: [x, y, w, h, re_x, re_y, le_x, le_y,
+            #              nose_x, nose_y, rm_x, rm_y, lm_x, lm_y, score]
+            x, y, fw, fh = int(det[0]), int(det[1]), int(det[2]), int(det[3])
 
             # Clamp to frame bounds
-            x1 = max(0, x1)
-            y1 = max(0, y1)
-            x2 = min(w, x2)
-            y2 = min(h, y2)
+            x  = max(0, x)
+            y  = max(0, y)
+            fw = min(fw, w - x)
+            fh = min(fh, h - y)
 
-            fw = x2 - x1
-            fh = y2 - y1
+            if fw <= 0 or fh <= 0:
+                continue
 
-            if fw > 0 and fh > 0:
-                faces.append({
-                    "x": x1, "y": y1,
-                    "w": fw, "h": fh,
-                    "confidence": confidence
-                })
+            confidence = float(det[14])
+            landmarks = {
+                "right_eye":   (int(det[4]),  int(det[5])),
+                "left_eye":    (int(det[6]),  int(det[7])),
+                "nose":        (int(det[8]),  int(det[9])),
+                "right_mouth": (int(det[10]), int(det[11])),
+                "left_mouth":  (int(det[12]), int(det[13])),
+            }
 
+            faces.append({
+                "x": x, "y": y, "w": fw, "h": fh,
+                "confidence": confidence,
+                "landmarks": landmarks,
+            })
+
+        # Sort by confidence descending so faces[0] is always the best detection
+        faces.sort(key=lambda f: f["confidence"], reverse=True)
         return faces
+
+    # ── Quality checks ──────────────────────────────────────────────────────
 
     def quality_check(self, frame, face):
         """
         Run quality checks on a detected face.
-        Returns (passed: bool, reasons: list[str])
+        Returns (passed: bool, reasons: list[str]).
+
+        Extra check vs old SSD version: eye symmetry via landmarks,
+        which catches heavy head tilts that produce bad embeddings.
         """
         reasons = []
         h, w = frame.shape[:2]
@@ -117,21 +160,29 @@ class FaceDetector:
         if abs(cx - 0.5) > self.CENTER_THRESHOLD or abs(cy - 0.5) > self.CENTER_THRESHOLD:
             reasons.append("Move to center")
 
-        # --- Crop face for pixel-level checks ---
+        # --- Landmark-based tilt check (YuNet bonus) ---
+        lm = face.get("landmarks")
+        if lm:
+            re, le = lm["right_eye"], lm["left_eye"]
+            eye_dx = le[0] - re[0]
+            eye_dy = le[1] - re[1]
+            tilt_deg = abs(np.degrees(np.arctan2(eye_dy, eye_dx)))
+            if tilt_deg > 20:
+                reasons.append("Tilt head straight")
+
+        # --- Pixel-level checks on the face crop ---
         fx, fy, fw, fh = face["x"], face["y"], face["w"], face["h"]
         face_crop = frame[fy:fy + fh, fx:fx + fw]
 
         if face_crop.size > 0:
             gray = cv2.cvtColor(face_crop, cv2.COLOR_BGR2GRAY)
 
-            # Brightness
             brightness = np.mean(gray)
             if brightness < self.BRIGHTNESS_LOW:
                 reasons.append("Too dark")
             elif brightness > self.BRIGHTNESS_HIGH:
                 reasons.append("Too bright")
 
-            # Blur (Laplacian variance)
             lap_var = cv2.Laplacian(gray, cv2.CV_64F).var()
             if lap_var < self.BLUR_THRESHOLD:
                 reasons.append("Blurry — hold still")
@@ -139,6 +190,8 @@ class FaceDetector:
             reasons.append("Face out of bounds")
 
         return len(reasons) == 0, reasons
+
+    # ── Crop ────────────────────────────────────────────────────────────────
 
     def crop_face(self, frame, face, padding=0.2):
         """Crop detected face region with padding."""

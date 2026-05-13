@@ -3,7 +3,7 @@ Flask Web Application for Face Recognition Attendance Tracking.
 Replaces the Kivy Android app with a browser-based interface.
 
 Uses:
-- MediaPipe for face detection (replaces Android ML Kit)
+- Yunet for face detection (replaces Android ML Kit)
 - MobileFaceNet/ArcFace for face recognition
 - SQLite for local storage
 - Browser webcam via JavaScript getUserMedia

@@ -1,6 +1,6 @@
 """
 ArcFace Face Recognition Engine.
-Uses MobileFaceNet (trained with ArcFace loss) via OpenCV DNN.
+Uses ArcFace ONNX model via OpenCV DNN.
 Handles embedding generation, cosine similarity matching, and attendance logging.
 """
 
@@ -12,9 +12,9 @@ from datetime import datetime
 
 
 class ArcFaceRecognizer:
-    """Face recognition using MobileFaceNet (ArcFace loss) ONNX model."""
+    """Face recognition using ArcFace ONNX model."""
 
-    def __init__(self, model_path="MobileFaceNet.onnx"):
+    def __init__(self, model_path="arc.onnx"):
         current_dir = os.path.dirname(os.path.abspath(__file__))
         full_path = os.path.join(current_dir, model_path)
 
@@ -60,10 +60,10 @@ class ArcFaceRecognizer:
     def get_embedding(self, face_bgr):
         """Generate embedding vector from a BGR face image."""
         resized = cv2.resize(face_bgr, (112, 112))
-        blob = cv2.dnn.blobFromImage(
-            resized, scalefactor=1.0, size=(112, 112),
-            mean=(0, 0, 0), swapRB=True
-        )
+        # Convert BGR to RGB (equivalent to swapRB=True)
+        rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+        # The model expects NHWC layout (1, 112, 112, 3)
+        blob = np.expand_dims(rgb.astype(np.float32), axis=0)
         self.net.setInput(blob)
         return self.net.forward()[0]
 

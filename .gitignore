@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.py[cod]
+
+# Local runtime artifacts
+master_attendance.db
+gateway.crt
+gateway.key
+host_data/
+data/
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+arcface.onnx
+MobileFaceNet.onnx

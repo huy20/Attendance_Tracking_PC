@@ -463,13 +463,13 @@ if __name__ == "__main__":
     # e.g., "http://192.168.1.100:5000/api/sync"
     syncer = AttendanceSyncer(
         db_path=os.path.join(DATA_DIR, "attendance.db"),
-        host_url='http://10.40.90.249:5000/sync',
-        sync_interval=60.0
+        host_url="https://127.0.0.1:5100/sync",  # https
+        gateway_cert="gateway.crt"                # pin the cert
     )
     syncer.start_syncing()
     
     try:
         # Use debug=False to prevent Flask's reloader from starting the syncer twice
-        app.run(host="0.0.0.0", port=5000, debug=False)
+        app.run(host="127.0.0.1", port=5000, debug=False)
     finally:
-        syncer.stop_syncing()
+        syncer.stop_syncing()       

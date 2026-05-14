@@ -8,7 +8,8 @@ gateway.crt
 gateway.key
 host_data/
 data/
-
+keys/
+public_keys/
 # Editor and OS files
 .DS_Store
 Thumbs.db

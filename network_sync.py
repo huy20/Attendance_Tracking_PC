@@ -3,57 +3,83 @@ import sqlite3
 import json
 import threading
 import time
-import hmac
-import hashlib
+import base64
 import requests
 
-# ── Device Credentials (hardcoded for testing — use keyring in production) ──
-DEVICE_ID     = "device_1_id"
-DEVICE_SECRET = "device_1_secret"
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding
 
-if not DEVICE_ID or not DEVICE_SECRET:
-    raise RuntimeError("Device credentials not found.")
+# ── Device Identity ───────────────────────────────────────────────────────────
+# DEVICE_ID        : unique identifier, matches public key filename on gateway
+# PRIVATE_KEY_PATH : this device's private key — never leaves this machine
+#
+# Production: load DEVICE_ID from keyring, restrict private key file permissions
+DEVICE_ID        = "device_1_id"
+PRIVATE_KEY_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "keys", DEVICE_ID, "private_key.pem"
+)
+
+USE_HTTPS    = False   # ← flip to True after generating gateway cert
+GATEWAY_CERT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gateway.crt")
 
 
-# ── HMAC Header Builder ───────────────────────────────────────────────────────
-def make_headers(payload):
-    """
-    Build signed headers for a sync request.
-    The secret never travels over the network — only a signature derived from it.
+def _load_private_key():
+    if not os.path.exists(PRIVATE_KEY_PATH):
+        raise FileNotFoundError(
+            f"Private key not found at: {PRIVATE_KEY_PATH}\n"
+            f"Run: python generate_device_keys.py --device-id {DEVICE_ID}"
+        )
+    with open(PRIVATE_KEY_PATH, "rb") as f:
+        return serialization.load_pem_private_key(f.read(), password=None)
 
-    Signature covers: device_id + timestamp + body
-      - device_id  : prevents using this signature for a different device
-      - timestamp  : signature expires after MAX_AGE seconds (replay protection)
-      - body       : prevents swapping the payload after signing
-    """
+_private_key = _load_private_key()
+
+
+# ── RSA Signing ───────────────────────────────────────────────────────────────
+def make_headers(payload: dict) -> dict:
     timestamp = str(int(time.time()))
-    body      = json.dumps(payload, separators=(',', ':'), sort_keys=True)
-    message   = f"{DEVICE_ID}.{timestamp}.{body}".encode()
-    signature = hmac.new(
-        DEVICE_SECRET.encode(),
+
+    # Serialize ONCE — this exact string is what gets sent and what gets signed
+    body    = json.dumps(payload, separators=(',', ':'), sort_keys=True)
+    message = f"{DEVICE_ID}.{timestamp}.{body}".encode()
+
+    signature = _private_key.sign(
         message,
-        hashlib.sha256
-    ).hexdigest()
+        padding.PSS(
+            mgf=padding.MGF1(hashes.SHA256()),
+            salt_length=padding.PSS.MAX_LENGTH,
+        ),
+        hashes.SHA256(),
+    )
 
     return {
         "Content-Type": "application/json",
         "X-Device-ID":  DEVICE_ID,
         "X-Timestamp":  timestamp,
-        "X-Signature":  signature,
+        "X-Signature":  base64.b64encode(signature).decode(),
     }
 
 
 # ── Syncer ────────────────────────────────────────────────────────────────────
 class AttendanceSyncer:
-    def __init__(self, db_path, host_url, sync_interval=60.0, gateway_cert=None):
-        self.db_path      = db_path
-        self.host_url     = host_url
+    def __init__(self, db_path, host_url, sync_interval=60.0):
+        self.db_path       = db_path
+        self.host_url      = host_url
         self.sync_interval = sync_interval
-        self.gateway_cert = gateway_cert  # path to gateway.crt for cert pinning
-                                          # set to False to skip verification (testing only)
-        self.syncing = False
-        self.running = False
-        self.thread  = None
+        self.syncing       = False
+        self.running       = False
+        self.thread        = None
+
+        # HTTPS cert verification
+        if USE_HTTPS and os.path.exists(GATEWAY_CERT):
+            self.verify = GATEWAY_CERT
+            print(f"HTTPS enabled. Cert pinned to: {GATEWAY_CERT}")
+        elif USE_HTTPS:
+            print("WARNING: USE_HTTPS=True but gateway.crt not found — using HTTP.")
+            self.verify = False
+        else:
+            self.verify = False
 
     def start_syncing(self):
         if self.running:
@@ -61,7 +87,7 @@ class AttendanceSyncer:
         self.running = True
         self.thread  = threading.Thread(target=self._sync_loop, daemon=True)
         self.thread.start()
-        print(f"Network Syncer started. Syncing to {self.host_url} every {self.sync_interval}s.")
+        print(f"Network Syncer started → {self.host_url} every {self.sync_interval}s.")
 
     def stop_syncing(self):
         self.running = False
@@ -86,7 +112,9 @@ class AttendanceSyncer:
             cursor = conn.cursor()
 
             try:
-                cursor.execute("ALTER TABLE attendance_logs ADD COLUMN synced INTEGER DEFAULT 0")
+                cursor.execute(
+                    "ALTER TABLE attendance_logs ADD COLUMN synced INTEGER DEFAULT 0"
+                )
                 conn.commit()
             except sqlite3.OperationalError:
                 pass  # column already exists
@@ -109,18 +137,20 @@ class AttendanceSyncer:
             }
 
             try:
+                body_str = json.dumps(payload, separators=(',', ':'), sort_keys=True)
+
                 response = requests.post(
                     self.host_url,
-                    json=payload,
-                    headers=make_headers(payload),          # ← HMAC signed headers
-                    verify=self.gateway_cert,               # ← cert pinning (or False for testing)
+                    data=body_str,                  # ← raw string, not json=
+                    headers=make_headers(payload),  # signs the same canonical form
+                    verify=self.verify,
                     timeout=10
-                )
+    )
 
                 if response.status_code == 200:
                     self._on_success(pending_ids)
                 else:
-                    print(f"SYNC FAILED: Gateway returned {response.status_code} — {response.text}")
+                    print(f"SYNC FAILED: {response.status_code} — {response.text}")
                     self.syncing = False
 
             except requests.RequestException as e:
@@ -133,15 +163,13 @@ class AttendanceSyncer:
 
     def _on_success(self, pending_ids):
         try:
-            conn   = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            placeholders = ','.join(['?'] * len(pending_ids))
-            cursor.execute(
-                f"UPDATE attendance_logs SET synced = 1 WHERE rowid IN ({placeholders})",
-                pending_ids
-            )
-            conn.commit()
-            conn.close()
+            with sqlite3.connect(self.db_path) as conn:
+                placeholders = ','.join(['?'] * len(pending_ids))
+                conn.execute(
+                    f"UPDATE attendance_logs SET synced = 1 WHERE rowid IN ({placeholders})",
+                    pending_ids
+                )
+                conn.commit()
             print(f"SYNC SUCCESS: Uploaded {len(pending_ids)} records.")
         except Exception as e:
             print(f"Failed to update sync status: {e}")

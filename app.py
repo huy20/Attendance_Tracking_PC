@@ -464,7 +464,6 @@ if __name__ == "__main__":
     syncer = AttendanceSyncer(
         db_path=os.path.join(DATA_DIR, "attendance.db"),
         host_url="https://127.0.0.1:5100/sync",  # https
-        gateway_cert="gateway.crt"                # pin the cert
     )
     syncer.start_syncing()
     

@@ -14,7 +14,7 @@
             <div class="user-avatar">{{ user.display[0] | upper }}</div>
             <div class="user-info">
                 <h3 class="user-name">{{ user.display }}</h3>
-                <span class="user-meta">{{ user.images }} image{{ 's' if user.images != 1 else '' }} captured</span>
+                <span class="user-meta">{{ user.embeddings }} embedding(s) — registered {{ user.last_registered }}</span>
             </div>
             <button class="btn btn-danger btn-sm" onclick="confirmDelete('{{ user.folder }}', '{{ user.display }}')">
                 Delete

@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
 import requests
 import json
 import time
@@ -19,42 +19,28 @@ logging.basicConfig(
 )
 
 # ── Config ────────────────────────────────────────────────────────────────────
-HOST_URL   = os.environ.get("HOST_URL",   "http://127.0.0.1:5050/sync")
-HOST_TOKEN = os.environ.get("HOST_TOKEN", "host_token_123")  # Must match the token expected by the host server
-USE_HTTPS  = True   # ← flip to True after generating gateway.crt / gateway.key
+HOST_BASE_URL = os.environ.get("HOST_BASE_URL", "http://127.0.0.1:5050")
+HOST_TOKEN    = os.environ.get("HOST_TOKEN",    "host_token_123")
+USE_HTTPS     = False   # ← flip to True after generating gateway.crt / gateway.key
 
 if not HOST_TOKEN:
     raise RuntimeError("HOST_TOKEN environment variable not set.")
 
+# ── Routes the gateway will NOT forward (handled locally) ─────────────────────
+LOCAL_ONLY_ROUTES = {"/health"}
+
 # ── Public Key Registry ───────────────────────────────────────────────────────
-# Each device's public key stored as:
-#   gateway/public_keys/<device_id>.pem
-#
-# To add a new device:
-#   1. Run generate_device_keys.py on the edge device
-#   2. Copy the generated public_key.pem here as <device_id>.pem
-#   3. Restart the gateway
-#
-# To revoke a device:
-#   1. Delete its .pem file from public_keys/
-#   2. Restart the gateway — that device is immediately blocked
 PUBLIC_KEYS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "public_keys")
 os.makedirs(PUBLIC_KEYS_DIR, exist_ok=True)
 
-MAX_AGE = 30  # seconds — reject requests older than this
+MAX_AGE = 30  # seconds
 
-# ── Public Key Loader ─────────────────────────────────────────────────────────
 def load_public_keys() -> dict:
-    """
-    Load all .pem files from public_keys/ into memory.
-    Returns {device_id: public_key_object}
-    Called at startup and on reload.
-    """
     keys = {}
     for filename in os.listdir(PUBLIC_KEYS_DIR):
         if not filename.endswith(".pem"):
             continue
-        device_id = filename[:-4]  # strip .pem
+        device_id = filename[:-4]
         filepath  = os.path.join(PUBLIC_KEYS_DIR, filename)
         try:
             with open(filepath, "rb") as f:
@@ -90,23 +76,17 @@ threading.Thread(target=_cleanup_loop, daemon=True).start()
 
 
 # ── RSA Signature Verification ────────────────────────────────────────────────
-def verify_request(req, data) -> tuple:
+def verify_request(req, raw_body: str) -> tuple:
     """
-    Verify the RSA signature on an incoming sync request.
+    Verify RSA-PSS signature on any incoming request.
+    Uses raw_body string to avoid JSON re-serialization mismatch.
     Returns (device_id, None) on success or (None, error_string) on failure.
-
-    Checks in order:
-      1. Required headers present
-      2. Timestamp freshness (anti-replay)
-      3. Signature not reused (anti-replay)
-      4. Device has a registered public key
-      5. RSA-PSS signature valid against public key
     """
     device_id = req.headers.get("X-Device-ID")
     timestamp = req.headers.get("X-Timestamp")
     signature = req.headers.get("X-Signature")
 
-    # 1. All headers must be present
+    # 1. All auth headers must be present
     if not all([device_id, timestamp, signature]):
         return None, "Missing authentication headers"
 
@@ -119,8 +99,8 @@ def verify_request(req, data) -> tuple:
     if age > MAX_AGE:
         return None, f"Request expired ({age}s old, max {MAX_AGE}s)"
 
-    # 3. Replay check — same signature can't be used twice
-    sig_key = f"{device_id}.{signature[:16]}"  # truncated key to save memory
+    # 3. Replay check
+    sig_key = f"{device_id}.{signature[:16]}"
     with _replay_lock:
         if sig_key in _replay_window:
             logging.warning(f"Replay attack from device '{device_id}'")
@@ -130,14 +110,13 @@ def verify_request(req, data) -> tuple:
     # 4. Device must have a registered public key
     public_key = _public_keys.get(device_id)
     if not public_key:
-        logging.warning(f"No public key registered for device '{device_id}'")
+        logging.warning(f"Unknown device: '{device_id}'")
         return None, "Unknown device"
 
-    # 5. Verify RSA-PSS signature
+    # 5. Verify RSA-PSS signature against raw body
     try:
         sig_bytes = base64.b64decode(signature)
-        body      = json.dumps(data, separators=(',', ':'), sort_keys=True)
-        message   = f"{device_id}.{timestamp}.{body}".encode()
+        message   = f"{device_id}.{timestamp}.{raw_body}".encode()
 
         public_key.verify(
             sig_bytes,
@@ -148,7 +127,6 @@ def verify_request(req, data) -> tuple:
             ),
             hashes.SHA256(),
         )
-        # verify() raises InvalidSignature if it fails — no return value needed
         return device_id, None
 
     except InvalidSignature:
@@ -159,52 +137,98 @@ def verify_request(req, data) -> tuple:
         return None, "Verification error"
 
 
-# ── Routes ────────────────────────────────────────────────────────────────────
-@app.route("/sync", methods=["POST"])
-def sync():
-    # 1. Parse body first — needed for signature verification
-    data = request.get_json()
-    if not data:
-        return jsonify({"error": "Bad request — empty body"}), 400
+# ── Forward to Host ───────────────────────────────────────────────────────────
+def forward_to_host(device_id: str, path: str, method: str, raw_body: bytes, content_type: str):
+    """
+    Forward a verified request to the host, stripping RSA headers
+    and injecting HOST_TOKEN + device_id.
+    Returns a Flask Response mirroring the host's response.
+    """
+    target_url = f"{HOST_BASE_URL}{path}"
 
-    # 2. Verify RSA signature
-    device_id, error = verify_request(request, data)
-    if error:
-        return jsonify({"error": error}), 401
+    # Build clean headers for host — no RSA headers, just token
+    forward_headers = {
+        "Content-Type":  content_type or "application/json",
+        "X-Sync-Token":  HOST_TOKEN,
+        "X-Device-ID":   device_id,   # let host know which device this came from
+    }
 
-    # 3. Validate payload structure
-    if "records" not in data:
-        return jsonify({"error": "Missing records"}), 400
-
-    records = data["records"]
-    for rec in records:
-        if "person_name" not in rec or "timestamp" not in rec:
-            return jsonify({"error": "Invalid record format"}), 400
-
-    # 4. Forward to host — include verified device_id
     try:
-        response = requests.post(
-            HOST_URL,
-            json={"records": records, "device_id": device_id},
-            headers={
-                "Content-Type": "application/json",
-                "X-Sync-Token": HOST_TOKEN,
-            },
-            timeout=10
+        host_response = requests.request(
+            method=method,
+            url=target_url,
+            data=raw_body,             # forward exact raw body bytes
+            headers=forward_headers,
+            timeout=10,
         )
-        return jsonify(response.json()), response.status_code
+
+        # Mirror host response back to edge device
+        return Response(
+            response=host_response.content,
+            status=host_response.status_code,
+            content_type=host_response.headers.get("Content-Type", "application/json"),
+        )
 
     except requests.RequestException as e:
+        logging.error(f"Failed to reach host at {target_url}: {e}")
         return jsonify({"error": f"Could not reach host: {e}"}), 502
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  LOCAL ROUTES  (handled by gateway, not forwarded)
+# ══════════════════════════════════════════════════════════════════════════════
+
 @app.route("/health", methods=["GET"])
 def health():
+    """Gateway health check — not forwarded to host."""
     return jsonify({
-        "status":          "ok",
+        "status":             "ok",
         "registered_devices": list(_public_keys.keys()),
     }), 200
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  CATCH-ALL PROXY  (verify RSA → forward everything else to host)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/<path:path>", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+def proxy(path):
+    """
+    Single catch-all route.
+    Any request that passes RSA verification is forwarded to the host.
+
+    Flow:
+      1. Read raw body (used for signature verification)
+      2. Verify RSA signature
+      3. Forward to host with HOST_TOKEN
+      4. Mirror host response back to client
+
+    Adding new host endpoints requires NO changes to gateway.py —
+    just add the route to host.py and the gateway forwards it automatically.
+    """
+    full_path = f"/{path}"
+
+    # ── GET requests: no body to verify, use path + timestamp + empty string ──
+    raw_body = request.get_data(as_text=True)  # empty string for GET
+
+    # ── Verify RSA signature ──────────────────────────────────────────────────
+    device_id, error = verify_request(request, raw_body)
+    if error:
+        return jsonify({"error": error}), 401
+
+    # ── Forward to host ───────────────────────────────────────────────────────
+    return forward_to_host(
+        device_id    = device_id,
+        path         = full_path,
+        method       = request.method,
+        raw_body     = request.get_data(),          # raw bytes for forwarding
+        content_type = request.content_type,
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  MAIN
+# ══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
     if USE_HTTPS:
@@ -221,7 +245,7 @@ if __name__ == "__main__":
         ssl_context = None
 
     app.run(
-        host="127.0.0.1",
+        host="127.0.0.1",   # gateway faces the network
         port=5100,
         ssl_context=ssl_context,
         debug=False

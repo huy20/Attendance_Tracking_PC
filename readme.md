@@ -2,9 +2,13 @@
 
 ## Architecture
 ```
-[app.py :5000]  →  [gateway.py :5100]  →  [host.py :5050]
- Face recognition    RSA auth + forward    Master attendance DB
+[app.py :5000]  ↔  [gateway.py :5100]  ↔  [host.py :5050]
+ Face recognition    RSA auth + forward    Master DB (Faces & Attendance)
 ```
+
+**Bidirectional Data Flow**:
+- **Push**: Edge devices send attendance logs and new face registrations up to the host.
+- **Pull**: Edge devices periodically pull the latest face database (including new faces and deletions) from the host, keeping all cameras in sync.
 
 ---
 
